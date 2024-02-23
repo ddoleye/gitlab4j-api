@@ -3,8 +3,12 @@ package org.gitlab4j.api;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.Socket;
+import java.net.HttpURLConnection;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.URL;
+import java.net.Socket;
+import java.net.SocketAddress;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
 import java.security.cert.CertificateException;
@@ -37,6 +41,7 @@ import org.gitlab4j.api.utils.MaskingLoggingFilter;
 import org.glassfish.jersey.apache.connector.ApacheConnectorProvider;
 import org.glassfish.jersey.client.ClientConfig;
 import org.glassfish.jersey.client.ClientProperties;
+import org.glassfish.jersey.client.HttpUrlConnectorProvider;
 import org.glassfish.jersey.client.JerseyClientBuilder;
 import org.glassfish.jersey.jackson.JacksonFeature;
 import org.glassfish.jersey.media.multipart.BodyPart;
@@ -58,6 +63,8 @@ public class GitLabApiClient implements AutoCloseable {
     protected static final String SUDO_HEADER           = "Sudo";
     protected static final String AUTHORIZATION_HEADER  = "Authorization";
     protected static final String X_GITLAB_TOKEN_HEADER = "X-Gitlab-Token";
+
+    public static final String SOCKS_PROXY = "socks_proxy";
 
     private ClientConfig clientConfig;
     private Client apiClient;
@@ -231,7 +238,9 @@ public class GitLabApiClient implements AutoCloseable {
         clientConfig = new ClientConfig();
         if (clientConfigProperties != null) {
 
-            if (clientConfigProperties.containsKey(ClientProperties.PROXY_URI)) {
+            if (clientConfigProperties.containsKey(SOCKS_PROXY)) {
+                setSocksProxy(clientConfigProperties.get(SOCKS_PROXY));
+            } else if (clientConfigProperties.containsKey(ClientProperties.PROXY_URI)) {
                 clientConfig.connectorProvider(new ApacheConnectorProvider());
             }
 
@@ -977,5 +986,53 @@ public class GitLabApiClient implements AutoCloseable {
      */
     public void setAuthTokenSupplier(Supplier<String> authTokenSupplier) {
         this.authToken = authTokenSupplier;
+    }
+
+    /**
+     * SOCKS5 Proxy Setting
+     *
+     * host:port
+     *
+     * @param value
+     * @throws IllegalArgumentException
+     */
+    void setSocksProxy(Object value) {
+        if (value == null || !(value instanceof String))
+            throw new IllegalArgumentException("SOCKS Proxy [" + value + "] is invalid ");
+
+        String proxy = (String)value;
+        int index = proxy.indexOf(':');
+        if (index <= 0 || index >= proxy.length() - 1) // ":nn", "localhost:"
+            throw new IllegalArgumentException("SOCKS Proxy [" + proxy + "] is invalid ");
+
+        String host = proxy.substring(0, index);
+        int port;
+        try {
+            port = Integer.parseUnsignedInt(proxy.substring(index + 1), 10);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("SOCKS Proxy [" + proxy + "] is invalid ");
+        }
+
+        // https://github.com/heishiroh/jersey-client-socks-sample
+        SocksConnectionFactory connectionFactory = new SocksConnectionFactory(host, port);
+        HttpUrlConnectorProvider connectorProvider = new HttpUrlConnectorProvider();
+        connectorProvider.connectionFactory(connectionFactory);
+        clientConfig.connectorProvider(connectorProvider);
+    }
+
+    /**
+     * @see https://github.com/heishiroh/jersey-client-socks-sample
+     */
+    class SocksConnectionFactory implements HttpUrlConnectorProvider.ConnectionFactory {
+        private final Proxy proxy;
+
+        public SocksConnectionFactory(String hostname, int port) {
+            SocketAddress socksAddr = new InetSocketAddress(hostname, port);
+            this.proxy = new Proxy(Proxy.Type.SOCKS, socksAddr);
+        }
+
+        public HttpURLConnection getConnection(URL url) throws IOException {
+            return (HttpURLConnection) url.openConnection(proxy);
+        }
     }
 }
